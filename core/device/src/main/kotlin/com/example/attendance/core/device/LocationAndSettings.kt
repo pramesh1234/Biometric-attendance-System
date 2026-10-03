@@ -1,16 +1,40 @@
 package com.example.attendance.core.device
+
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.location.*
-import android.os.*
-import com.example.attendance.core.domain.*
-import com.example.attendance.core.model.*
-import kotlinx.coroutines.*
+import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
+import android.os.Looper
+import android.util.Log
+import androidx.core.content.ContextCompat
+import com.example.attendance.core.domain.DomainException
+import com.example.attendance.core.domain.LocationProvider
+import com.example.attendance.core.domain.OfficeSettings
+import com.example.attendance.core.domain.SessionStore
+import com.example.attendance.core.model.GeoPoint
+import com.example.attendance.core.model.OfficeLocation
+import com.example.attendance.core.model.Role
+import com.example.attendance.core.model.Session
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.*
-import java.time.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
-import kotlin.coroutines.resume
 
 class PersistentSessionStore(context: Context) : SessionStore {
     private val preferences = context.getSharedPreferences("session", Context.MODE_PRIVATE)
@@ -30,70 +54,241 @@ class PersistentSessionStore(context: Context) : SessionStore {
         }
         value.value = session
     }
+
     private fun readSession(): Session? = runCatching {
         val accountId = preferences.getString("account_id", null) ?: return null
         val role = Role.valueOf(preferences.getString("role", null) ?: return null)
-        val passwordVersion = Instant.parse(preferences.getString("password_version", null) ?: return null)
-        Session(accountId, role, preferences.getString("employee_id", null), passwordVersion, preferences.getBoolean("must_change_password", false))
+        val passwordVersion =
+            Instant.parse(preferences.getString("password_version", null) ?: return null)
+        Session(
+            accountId,
+            role,
+            preferences.getString("employee_id", null),
+            passwordVersion,
+            preferences.getBoolean("must_change_password", false)
+        )
     }.getOrNull()
 }
 
 class LocalOfficeSettings(context: Context) : OfficeSettings {
     private val preferences = context.getSharedPreferences("office", Context.MODE_PRIVATE)
-    private val value = MutableStateFlow(runCatching { ZoneId.of(preferences.getString("zone", ZoneId.systemDefault().id)) }.getOrDefault(ZoneId.systemDefault()))
+    private val value = MutableStateFlow(runCatching {
+        ZoneId.of(
+            preferences.getString(
+                "zone",
+                ZoneId.systemDefault().id
+            )
+        )
+    }.getOrDefault(ZoneId.systemDefault()))
     private val office = MutableStateFlow(readOfficeLocation())
     override val zone = value.asStateFlow()
     override val officeLocation = office.asStateFlow()
-    override fun setZone(zone: ZoneId) { preferences.edit().putString("zone", zone.id).apply(); value.value = zone }
-    override fun setOfficeLocation(location: OfficeLocation) { preferences.edit().putFloat("office_lat", location.latitude.toFloat()).putFloat("office_lon", location.longitude.toFloat()).putString("office_address", location.address).apply(); office.value = location }
+    override fun setZone(zone: ZoneId) {
+        preferences.edit().putString("zone", zone.id).apply(); value.value = zone
+    }
+
+    override fun setOfficeLocation(location: OfficeLocation) {
+        preferences.edit().putFloat("office_lat", location.latitude.toFloat())
+            .putFloat("office_lon", location.longitude.toFloat())
+            .putString("office_address", location.address).apply(); office.value = location
+    }
+
     private fun readOfficeLocation(): OfficeLocation? {
         if (!preferences.contains("office_lat") || !preferences.contains("office_lon")) return null
-        return OfficeLocation(preferences.getFloat("office_lat", 0f).toDouble(), preferences.getFloat("office_lon", 0f).toDouble(), preferences.getString("office_address", null))
+        return OfficeLocation(
+            preferences.getFloat("office_lat", 0f).toDouble(),
+            preferences.getFloat("office_lon", 0f).toDouble(),
+            preferences.getString("office_address", null)
+        )
     }
 }
-class AndroidLocationProvider(private val context: Context) : com.example.attendance.core.domain.LocationProvider {
-    private val manager = context.getSystemService(LocationManager::class.java)
+
+class AndroidLocationProvider(
+    private val context: Context
+) : LocationProvider {
+
+    private val client =
+        LocationServices.getFusedLocationProviderClient(context)
+
     @SuppressLint("MissingPermission")
-    override suspend fun current(): GeoPoint = withContext(Dispatchers.Main) {
-        val provider = when { context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED && manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER; manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER; else -> throw DomainException("Turn on device location and try again.") }
-        val location = try {
-            withTimeout(30_000) {
-                suspendCancellableCoroutine<Location> { continuation ->
-                    val listener = object : LocationListener {
-                        override fun onLocationChanged(location: Location) { manager.removeUpdates(this); if (continuation.isActive) continuation.resume(location) }
-                        override fun onProviderDisabled(provider: String) {}
-                        override fun onProviderEnabled(provider: String) {}
-                        @Deprecated("Legacy Android callback") override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-                    }
-                    manager.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
-                    continuation.invokeOnCancellation { manager.removeUpdates(listener) }
-                }
+    override suspend fun current(): GeoPoint {
+
+        val fineGranted =
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+        val coarseGranted =
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+        if (!fineGranted && !coarseGranted) {
+            throw DomainException(
+                "Location permission is required."
+            )
+        }
+
+        Log.d("LOCATION", "Requesting fused location")
+
+        /*
+         * First try cached location.
+         */
+        val lastLocation = try {
+            client.lastLocation.await()
+        } catch (e: Exception) {
+            null
+        }
+
+        if (lastLocation != null) {
+
+            val age =
+                System.currentTimeMillis() - lastLocation.time
+
+            Log.d(
+                "LOCATION",
+                """
+                Last location
+                lat=${lastLocation.latitude}
+                lng=${lastLocation.longitude}
+                accuracy=${lastLocation.accuracy}
+                age=$age ms
+                """.trimIndent()
+            )
+
+            // Accept a reasonably recent cached location
+            if (age <= 60_000) {
+                return lastLocation.toGeoPoint()
             }
-        } catch (e: TimeoutCancellationException) { throw DomainException("Location timed out. Move near a window and retry.") }
-        GeoPoint(location.latitude, location.longitude, location.accuracy, addressFor(location), Instant.ofEpochMilli(location.time))
+        }
+
+        /*
+         * Otherwise request a fresh location.
+         */
+        val cancellationTokenSource =
+            CancellationTokenSource()
+
+        val location = try {
+
+            withTimeout(30_000) {
+
+                client.getCurrentLocation(
+                    Priority.PRIORITY_HIGH_ACCURACY,
+                    cancellationTokenSource.token
+                ).await()
+            }
+
+        } catch (e: TimeoutCancellationException) {
+
+            cancellationTokenSource.cancel()
+
+            Log.e(
+                "LOCATION",
+                "Fused location timed out"
+            )
+
+            throw DomainException(
+                "Unable to get your location. Please check location settings and try again."
+            )
+        }
+
+        if (location == null) {
+            throw DomainException(
+                "Unable to determine your current location."
+            )
+        }
+
+        Log.d(
+            "LOCATION",
+            """
+            Current location received
+            lat=${location.latitude}
+            lng=${location.longitude}
+            accuracy=${location.accuracy}
+            """.trimIndent()
+        )
+
+        return location.toGeoPoint()
     }
+
     @SuppressLint("MissingPermission")
-    override fun updates(): Flow<GeoPoint> = callbackFlow {
-        val provider = when {
-            context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED && manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            (context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED || context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) && manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> throw DomainException("Turn on device location and try again.")
+    override fun updates(): Flow<GeoPoint> =
+        callbackFlow {
+
+            val request =
+                LocationRequest.Builder(
+                    Priority.PRIORITY_HIGH_ACCURACY,
+                    5_000L
+                )
+                    .setMinUpdateIntervalMillis(2_000L)
+                    .setWaitForAccurateLocation(false)
+                    .build()
+
+            val callback =
+                object : LocationCallback() {
+
+                    override fun onLocationResult(
+                        result: LocationResult
+                    ) {
+
+                        val location =
+                            result.lastLocation ?: return
+
+                        Log.d(
+                            "LOCATION",
+                            """
+                        Location update
+                        lat=${location.latitude}
+                        lng=${location.longitude}
+                        accuracy=${location.accuracy}
+                        """.trimIndent()
+                        )
+
+                        trySend(
+                            location.toGeoPoint()
+                        )
+                    }
+                }
+
+            client.requestLocationUpdates(
+                request,
+                callback,
+                Looper.getMainLooper()
+            )
+
+            awaitClose {
+                client.removeLocationUpdates(callback)
+            }
         }
-        val listener = object : LocationListener {
-            override fun onLocationChanged(location: Location) { trySend(GeoPoint(location.latitude, location.longitude, location.accuracy, "%.5f, %.5f".format(java.util.Locale.ROOT, location.latitude, location.longitude), Instant.ofEpochMilli(location.time))) }
-            override fun onProviderDisabled(provider: String) {}
-            override fun onProviderEnabled(provider: String) {}
-            @Deprecated("Legacy Android callback") override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-        }
-        manager.requestLocationUpdates(provider, 1_000L, 1f, listener, Looper.getMainLooper())
-        awaitClose { manager.removeUpdates(listener) }
+
+    private fun Location.toGeoPoint(): GeoPoint {
+        return GeoPoint(
+            latitude = latitude,
+            longitude = longitude,
+            accuracyM = accuracy,
+            label = addressFor(this).orEmpty(),
+            measuredAt = Instant.ofEpochMilli(time)
+        )
     }
-    @Suppress("DEPRECATION")
-    private suspend fun addressFor(location: Location): String = withContext(Dispatchers.IO) {
-        val fallback = "%.5f, %.5f".format(Locale.ROOT, location.latitude, location.longitude)
-        runCatching {
-            if (!Geocoder.isPresent()) return@runCatching fallback
-            Geocoder(context, Locale.getDefault()).getFromLocation(location.latitude, location.longitude, 1)?.firstOrNull()?.getAddressLine(0)?.takeIf { it.isNotBlank() } ?: fallback
-        }.getOrDefault(fallback)
+
+    private fun addressFor(location: Location): String? {
+        return try {
+            val geocoder = Geocoder(context, Locale.getDefault())
+
+            val addresses = geocoder.getFromLocation(
+                location.latitude,
+                location.longitude,
+                1
+            )
+
+            addresses
+                ?.firstOrNull()
+                ?.getAddressLine(0)
+
+        } catch (e: Exception) {
+            null
+        }
     }
 }

@@ -1,1 +1,9 @@
-<resources><style name="Theme.Attendance" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">true</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#355F50</item></style></resources>
+<resources>
+
+    <style name="Theme.Attendance" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#355F50</item>
+    </style>
+</resources>

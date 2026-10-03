@@ -10,5 +10,6 @@ data class EmployeeUi(
     val joiningDate: String,
     val blocked: Boolean = false
 ) {
-    val initials: String get() = name.split(" ").take(2).mapNotNull { it.firstOrNull() }.joinToString("")
+    val initials: String
+        get() = name.split(" ").take(2).mapNotNull { it.firstOrNull() }.joinToString("")
 }

@@ -18,6 +18,8 @@ android {
 kotlin { jvmToolchain(17) }
 
 dependencies {
+    implementation(libs.play.services.location)
+    implementation(libs.kotlinx.coroutines.play.services)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     implementation(project(":core:domain"))

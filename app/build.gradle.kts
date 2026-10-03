@@ -7,13 +7,19 @@ plugins {
 android {
     namespace = "com.example.attendance"
     compileSdk = 37
-
     defaultConfig {
         testInstrumentationRunner = "com.example.attendance.Phase3TestRunner"; minSdk =
         26; applicationId = providers.gradleProperty("attendanceApplicationId")
         .getOrElse("com.example.attendance.local"); targetSdk = 37; versionCode = 4; versionName =
         "0.3-phase3"
     }
+    buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17
     }
@@ -29,6 +35,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.hilt.android.testing)
+    androidTestImplementation(libs.errorprone.annotations)
     kspAndroidTest(libs.hilt.compiler)
 
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
@@ -37,6 +44,7 @@ dependencies {
     implementation(project(":core:device"))
     implementation(project(":core:domain"))
     implementation(libs.hilt.android)
+    implementation(libs.errorprone.annotations)
     ksp(libs.hilt.compiler)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

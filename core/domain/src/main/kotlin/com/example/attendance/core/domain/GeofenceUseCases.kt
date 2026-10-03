@@ -1,11 +1,27 @@
 package com.example.attendance.core.domain
 
-import com.example.attendance.core.model.*
+import com.example.attendance.core.model.GeoPoint
+import com.example.attendance.core.model.GeofenceState
+import com.example.attendance.core.model.GeofenceStatus
+import com.example.attendance.core.model.OfficeLocation
+import com.example.attendance.core.model.Role
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
 import java.time.Clock
 import java.time.Duration
-import kotlin.math.*
+import kotlin.math.asin
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 private const val EARTH_RADIUS_M = 6371008.8
 const val ATTENDANCE_GEOFENCE_RADIUS_M = 100.0
@@ -24,15 +40,34 @@ fun distanceMeters(from: OfficeLocation, to: GeoPoint): Double {
     return EARTH_RADIUS_M * 2 * asin(min(1.0, sqrt(a)))
 }
 
-fun evaluateGeofence(office: OfficeLocation?, location: GeoPoint?, now: java.time.Instant): GeofenceState {
-    if (office == null || !isValidOfficeLocation(office)) return GeofenceState(GeofenceStatus.NOT_CONFIGURED, office = office)
+fun evaluateGeofence(
+    office: OfficeLocation?,
+    location: GeoPoint?,
+    now: java.time.Instant
+): GeofenceState {
+    if (office == null || !isValidOfficeLocation(office)) return GeofenceState(
+        GeofenceStatus.NOT_CONFIGURED,
+        office = office
+    )
     if (location == null) return GeofenceState(GeofenceStatus.WAITING, office = office)
-    val validPoint = location.latitude.isFinite() && location.longitude.isFinite() && location.latitude in -90.0..90.0 && location.longitude in -180.0..180.0 && location.accuracyM.isFinite() && location.accuracyM >= 0f
+    val validPoint =
+        location.latitude.isFinite() && location.longitude.isFinite() && location.latitude in -90.0..90.0 && location.longitude in -180.0..180.0 && location.accuracyM.isFinite() && location.accuracyM >= 0f
     if (!validPoint) return GeofenceState(GeofenceStatus.INVALID, fix = location, office = office)
-    if (Duration.between(location.measuredAt, now).abs() > Duration.ofSeconds(30)) return GeofenceState(GeofenceStatus.STALE, fix = location, office = office)
-    if (location.accuracyM > 50f) return GeofenceState(GeofenceStatus.INACCURATE, fix = location, office = office)
+    if (Duration.between(location.measuredAt, now)
+            .abs() > Duration.ofSeconds(30)
+    ) return GeofenceState(GeofenceStatus.STALE, fix = location, office = office)
+    if (location.accuracyM > 50f) return GeofenceState(
+        GeofenceStatus.INACCURATE,
+        fix = location,
+        office = office
+    )
     val distance = distanceMeters(office, location)
-    return GeofenceState(if (distance <= ATTENDANCE_GEOFENCE_RADIUS_M + 0.000001) GeofenceStatus.INSIDE else GeofenceStatus.OUTSIDE, distance, location, office)
+    return GeofenceState(
+        if (distance <= ATTENDANCE_GEOFENCE_RADIUS_M + 0.000001) GeofenceStatus.INSIDE else GeofenceStatus.OUTSIDE,
+        distance,
+        location,
+        office
+    )
 }
 
 fun GeofenceState.message(): String = when (status) {
@@ -48,26 +83,93 @@ fun GeofenceState.message(): String = when (status) {
 
 class GeofenceException(val state: GeofenceState) : DomainException(state.message())
 
-class SetOfficeLocationUseCase(private val repo: WorkspaceRepository, private val sessions: SessionStore, private val settings: OfficeSettings) {
+class SetOfficeLocationUseCase(
+    private val repo: WorkspaceRepository,
+    private val sessions: SessionStore,
+    private val settings: OfficeSettings
+) {
     suspend operator fun invoke(latitude: Double, longitude: Double, address: String? = null) {
         repo.read().authorize(sessions.session.value, Role.ADMIN)
-        val location = OfficeLocation(latitude, longitude, address?.trim()?.takeIf { it.isNotBlank() })
+        val location =
+            OfficeLocation(latitude, longitude, address?.trim()?.takeIf { it.isNotBlank() })
         requireRule(isValidOfficeLocation(location), "Enter a valid latitude and longitude.")
         settings.setOfficeLocation(location)
     }
 }
 
-class ObserveGeofenceUseCase(private val locations: LocationProvider, private val settings: OfficeSettings, private val clock: Clock) {
+class ObserveGeofenceUseCase(
+    private val locations: LocationProvider,
+    private val settings: OfficeSettings,
+    private val clock: Clock
+) {
+
     operator fun invoke(): Flow<GeofenceReading> {
+
+        val points: Flow<GeoPoint?> = flow {
+
+            // 1. Immediately get current location
+            try {
+                val currentLocation = locations.current()
+
+                println(
+                    "GEOFENCE: Initial location: " +
+                            "${currentLocation.latitude}, " +
+                            "${currentLocation.longitude}, " +
+                            "accuracy=${currentLocation.accuracyM}"
+                )
+
+                emit(currentLocation)
+
+            } catch (e: Exception) {
+
+                println(
+                    "GEOFENCE: Unable to get initial location ${e.message}"
+                )
+
+                emit(null)
+            }
+
+            // 2. Continue listening for location changes
+            emitAll(
+                locations.updates()
+                    .onEach { location ->
+                        println(
+                            "GEOFENCE :Location update: " +
+                                    "${location.latitude}, " +
+                                    "${location.longitude}, " +
+                                    "accuracy=${location.accuracyM}"
+                        )
+                    }
+            )
+        }
+
         val ticks = flow {
-            while (true) {
+            while (currentCoroutineContext().isActive) {
                 emit(clock.instant())
                 delay(1_000)
             }
         }
-        val points = locations.updates().map<GeoPoint, GeoPoint?> { it }.onStart { emit(null) }.catch { emit(null) }
-        return combine(settings.officeLocation, points, ticks) { office, point, now ->
-            GeofenceReading(point, evaluateGeofence(office, point, now))
+
+        return combine(
+            settings.officeLocation,
+            points,
+            ticks
+        ) { office, point, now ->
+
+            val state = evaluateGeofence(
+                office = office,
+                location = point,
+                now = now
+            )
+
+            println(
+                "GEOFENCE:status=${state.status} distance=${state.distanceM} accuracy=${point?.accuracyM} office=${office?.latitude},${office?.longitude} current=${point?.latitude},${point?.longitude}"
+            )
+
+            GeofenceReading(
+                location = point,
+                state = state
+            )
         }.distinctUntilChanged()
     }
 }

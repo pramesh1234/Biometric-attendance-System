@@ -1,25 +1,28 @@
 [versions]
 agp = "9.1.1"
 kotlin = "2.4.20"
+kotlinxCoroutinesPlayServices = "1.11.0"
 ksp = "2.3.12"
 hilt = "2.60.1"
 androidxComposeBom = "2026.09.00"
-androidxActivity = "1.9.3"
-androidxLifecycle = "2.8.7"
+androidxActivity = "1.13.0"
+androidxLifecycle = "2.11.0"
 androidxHiltNavigationCompose = "1.4.0"
-androidxNavigation3 = "1.0.0-alpha01"
-androidxRoom = "2.7.0-alpha12"
-androidxTestRunner = "1.6.2"
-androidxTestRules = "1.6.1"
-androidxTestExtJunit = "1.2.1"
-androidxCamera = "1.4.0"
-androidxCore = "1.15.0"
-androidxExifinterface = "1.3.7"
+androidxNavigation3 = "1.2.0"
+androidxRoom = "2.8.5"
+androidxTestRunner = "1.7.0"
+androidxTestRules = "1.7.0"
+androidxTestExtJunit = "1.3.0"
+androidxCamera = "1.6.2"
+androidxCore = "1.19.1"
+androidxExifinterface = "1.4.2"
 kotlinxCoroutines = "1.11.0"
 kotlinxSerialization = "1.11.0"
 coil = "2.7.0"
 junit = "4.13.2"
-opencv = "5.0.0"
+opencv = "5.0.0.1"
+errorProneAnnotations = "2.50.0"
+playServicesLocation = "21.4.0"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "androidxActivity" }
@@ -55,9 +58,12 @@ hilt-android-testing = { group = "com.google.dagger", name = "hilt-android-testi
 hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-play-services = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutinesPlayServices" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
 kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
+errorprone-annotations = { group = "com.google.errorprone", name = "error_prone_annotations", version.ref = "errorProneAnnotations" }
+play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

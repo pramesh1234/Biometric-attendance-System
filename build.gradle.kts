@@ -11,8 +11,10 @@ plugins {
 tasks.register("test") {
     group = "verification"
     description = "Run domain coverage gates, JVM tests, Android lint and assemble the app."
-    dependsOn(":core:domain:check", ":core:common:test", ":core:data:testDebugUnitTest",
+    dependsOn(
+        ":core:domain:check", ":core:common:test", ":core:data:testDebugUnitTest",
         ":feature:onboarding:testDebugUnitTest", ":feature:admin:testDebugUnitTest",
         ":feature:staff:testDebugUnitTest", ":app:testDebugUnitTest",
-        ":app:lintDebug", ":app:assembleDebug")
+        ":app:lintDebug", ":app:assembleDebug"
+    )
 }

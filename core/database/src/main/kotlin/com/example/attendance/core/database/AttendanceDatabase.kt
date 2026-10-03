@@ -1,9 +1,22 @@
 package com.example.attendance.core.database
-import androidx.room.*
-@Database(entities = [EmployeeEntity::class, AccountEntity::class, EmployeePhotoEntity::class, VerificationAttemptEntity::class, ReviewRequestEntity::class, AttendanceRecordEntity::class, NoticeEntity::class, NoticeRecipientEntity::class, InboxNotificationEntity::class, HolidayEntity::class, CalendarDayEntity::class], version = 1, exportSchema = true)
-abstract class AttendanceDatabase : RoomDatabase() { abstract fun dao(): WorkspaceDao }
 
-fun createAttendanceDatabase(context: android.content.Context, name: String = "attendance.db"): AttendanceDatabase = Room.databaseBuilder(context, AttendanceDatabase::class.java, name)
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+
+@Database(
+    entities = [EmployeeEntity::class, AccountEntity::class, EmployeePhotoEntity::class, VerificationAttemptEntity::class, ReviewRequestEntity::class, AttendanceRecordEntity::class, NoticeEntity::class, NoticeRecipientEntity::class, InboxNotificationEntity::class, HolidayEntity::class, CalendarDayEntity::class],
+    version = 1,
+    exportSchema = true
+)
+abstract class AttendanceDatabase : RoomDatabase() {
+    abstract fun dao(): WorkspaceDao
+}
+
+fun createAttendanceDatabase(
+    context: android.content.Context,
+    name: String = "attendance.db"
+): AttendanceDatabase = Room.databaseBuilder(context, AttendanceDatabase::class.java, name)
     .addCallback(object : RoomDatabase.Callback() {
         override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
             db.execSQL("CREATE UNIQUE INDEX active_reference_photo ON employee_photos(employeeId) WHERE retiredAt IS NULL")
@@ -15,6 +28,11 @@ fun createAttendanceDatabase(context: android.content.Context, name: String = "a
                 "notifications" to "NEW.type NOT IN ('NOTICE','REVIEW_SUBMITTED','REVIEW_APPROVED','REVIEW_REJECTED') OR (NEW.type = 'NOTICE' AND (NEW.noticeRecipientId IS NULL OR NEW.reviewRequestId IS NOT NULL)) OR (NEW.type <> 'NOTICE' AND (NEW.reviewRequestId IS NULL OR NEW.noticeRecipientId IS NOT NULL))",
                 "work_calendar_days" to "NEW.type NOT IN ('WORKING','WEEKLY_OFF','HOLIDAY') OR (NEW.type = 'HOLIDAY' AND NEW.holidayId IS NULL) OR (NEW.type <> 'HOLIDAY' AND NEW.holidayId IS NOT NULL)"
             )
-            checks.forEach { (table, condition) -> listOf("INSERT", "UPDATE").forEach { op -> db.execSQL("CREATE TRIGGER validate_${table}_${op.lowercase()} BEFORE $op ON $table WHEN $condition BEGIN SELECT RAISE(ABORT, 'Invalid $table record'); END") } }
+            checks.forEach { (table, condition) ->
+                listOf(
+                    "INSERT",
+                    "UPDATE"
+                ).forEach { op -> db.execSQL("CREATE TRIGGER validate_${table}_${op.lowercase()} BEFORE $op ON $table WHEN $condition BEGIN SELECT RAISE(ABORT, 'Invalid $table record'); END") }
+            }
         }
     }).build()
